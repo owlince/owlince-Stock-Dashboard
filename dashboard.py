@@ -1,4 +1,4 @@
-# 檔名: dashboard.py (版本 3.3.2 - 最終畢業版)
+# 檔名: dashboard.py (版本 3.3.3 - 最終特權畢業版)
 
 import streamlit as st
 import pandas as pd
@@ -11,20 +11,26 @@ import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# 停用 requests 在 verify=False 時顯示的警告訊息
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
 # PART 1: 數據抓取與處理函式 (我們的引擎)
 @st.cache_data(ttl="1d")
 def load_data():
-    # ... (此處省略 load_data 內部程式碼，因為它的邏輯是正確的)
     DAYS_TO_QUERY = 90
     start_date = datetime.today()
     all_dividends_list = []
+    progress_placeholder = st.empty()
+
     for i in range(DAYS_TO_QUERY):
         target_date_dt = start_date + timedelta(days=i)
         target_date_str = target_date_dt.strftime('%Y%m%d')
+        progress_placeholder.text(f"正在查詢除權息日期: {target_date_str} ...")
         url = f"https://www.twse.com.tw/exchangeReport/TWT49U?response=json&strDate={target_date_str}&endDate={target_date_str}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'}
         try:
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, verify=False) # 植入萬能鑰匙
             if response.status_code == 200:
                 json_data = response.json()
                 if 'data' in json_data and json_data['data']:
@@ -32,15 +38,20 @@ def load_data():
                     daily_df['除權息日期'] = target_date_str
                     all_dividends_list.append(daily_df)
         except Exception as e:
-            st.error(f"抓取 {target_date_str} 資料時發生錯誤: {e}")
+            progress_placeholder.warning(f"抓取 {target_date_str} 資料時發生錯誤: {e}")
         time.sleep(0.3)
+    
+    progress_placeholder.empty()
+
     if not all_dividends_list:
         st.warning("未來三個月內查無任何除權息資料。")
         return pd.DataFrame()
+    
     dividends_df = pd.concat(all_dividends_list, ignore_index=True)
     dividends_df = dividends_df[dividends_df['股票代號'].str.match(r'^\d{4}$|^\d{6}$')].copy()
     stock_list = dividends_df['股票代號'].unique()
     stock_data_list = []
+    
     progress_bar = st.progress(0, text="正在抓取股價與計算技術指標...")
     for i, stock_id in enumerate(stock_list):
         stock_id_yf = f"{stock_id}.TW"
@@ -61,6 +72,7 @@ def load_data():
             pass
         time.sleep(0.2)
         progress_bar.progress((i + 1) / len(stock_list), text=f"正在處理: {stock_id_yf}")
+    
     progress_bar.empty()
     price_volume_df = pd.DataFrame(stock_data_list)
     final_df = pd.merge(dividends_df, price_volume_df, on='股票代號', how='left')
@@ -84,8 +96,6 @@ def get_stock_history(stock_id):
 def plot_stock_chart(hist_df):
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.5, 0.15, 0.15, 0.15])
     fig.add_trace(go.Candlestick(x=hist_df.index, open=hist_df['Open'], high=hist_df['High'], low=hist_df['Low'], close=hist_df['Close'], name="K線"), row=1, col=1)
-    
-    # --- 繪圖前的「存在性檢查」 ---
     if 'SMA_5' in hist_df.columns:
         fig.add_trace(go.Scatter(x=hist_df.index, y=hist_df['SMA_5'], name="5日均線", line=dict(color='orange', width=1)), row=1, col=1)
     if 'SMA_20' in hist_df.columns:
@@ -98,13 +108,10 @@ def plot_stock_chart(hist_df):
     if 'STOCHk_9_3_3' in hist_df.columns and 'STOCHd_9_3_3' in hist_df.columns:
         fig.add_trace(go.Scatter(x=hist_df.index, y=hist_df['STOCHk_9_3_3'], name="K值", line=dict(color='green')), row=4, col=1)
         fig.add_trace(go.Scatter(x=hist_df.index, y=hist_df['STOCHd_9_3_3'], name="D值", line=dict(color='red')), row=4, col=1)
-    
     fig.update_layout(height=800, title_text="個股歷史線圖與技術指標", xaxis_rangeslider_visible=False)
     return fig
 
-# ==========================================================
-# ====== PART 2: 儀表板介面佈局 (最終畢業版) ======
-# ==========================================================
+# PART 2: 儀表板介面佈局 (最終畢業版)
 st.set_page_config(layout="wide")
 st.title("📊 全自動台股除權息戰情室")
 st.write(f"數據最後更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
